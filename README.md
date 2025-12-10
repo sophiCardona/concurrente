@@ -1,6 +1,6 @@
 # Red Neuronal MLP - Clasificación MNIST
 
-Este proyecto implementa una red neuronal perceptrón multicapa (MLP) para clasificar dígitos escritos a mano del dataset MNIST. Se desarrollaron **4 versiones diferentes** para comparar el rendimiento entre implementaciones secuenciales y paralelas en Python y C.
+Este proyecto implementa una red neuronal perceptrón multicapa (MLP) para clasificar dígitos escritos a mano del dataset MNIST. Se desarrollaron **5 versiones diferentes** para comparar el rendimiento entre implementaciones secuenciales y paralelas en Python y C, incluyendo aceleración GPU.
 
 ## 📋 Descripción del Proyecto
 
@@ -13,7 +13,7 @@ El objetivo es entrenar la red para reconocer dígitos y comparar los tiempos de
 
 ---
 
-## 🚀 Versiones Implementadas
+## Versiones Implementadas
 
 ### 1. Python Secuencial (`python_secuencial/`)
 
@@ -81,6 +81,31 @@ gcc mlp.c -o mlp_omp.exe -O3 -fopenmp
 
 ---
 
+### 5. C con CUDA (`c_cuda/`)
+
+Implementación GPU en C usando CUDA para acelerar operaciones matriciales en la tarjeta gráfica NVIDIA.
+
+**⚠️ Requisitos:**
+- **Tarjeta gráfica NVIDIA** con soporte CUDA
+- NVIDIA CUDA Toolkit instalado
+- Compilador `nvcc` disponible en PATH
+
+**Compilar y ejecutar:**
+```bash
+cd c_cuda
+nvcc mlp_cuda.cu -o mlp_cuda.exe -O3
+./mlp_cuda.exe
+```
+
+**Características:**
+- Kernels CUDA personalizados para multiplicación de matrices
+- Operaciones de forward/backward propagation en GPU
+- Transferencia de datos CPU ↔ GPU optimizada
+- Aprovecha miles de cores CUDA en paralelo
+- Máximo rendimiento con hardware especializado
+
+---
+
 ## 📁 Estructura del Proyecto
 
 ```
@@ -93,7 +118,8 @@ proyecto/
 ├── python_secuencial/         # Versión Python secuencial
 ├── python_mp/                 # Versión Python con multiprocessing
 ├── c_secuencial/              # Versión C secuencial
-└── c_openmp/                  # Versión C con OpenMP
+├── c_openmp/                  # Versión C con OpenMP
+└── c_cuda/                    # Versión C con CUDA (GPU)
 ```
 
 ---
@@ -109,11 +135,18 @@ proyecto/
 - GCC (MinGW en Windows)
 - Soporte OpenMP
 
+**C con CUDA (opcional):**
+- Tarjeta gráfica NVIDIA con soporte CUDA
+- NVIDIA CUDA Toolkit
+- Compilador `nvcc`
+
 ---
 
 ## 📊 Comparación de Rendimiento
 
-Cada versión imprime el tiempo de ejecución al finalizar. Los resultados esperados:
-1. **C Secuencial:** Más rápido que Python secuencial
-2. **Python MP:** Mejora escalable según número de cores
-3. **C OpenMP:** Máximo rendimiento con paralelización optimizada
+Cada versión imprime el tiempo de ejecución al finalizar. Los resultados esperados (de más lento a más rápido):
+1. **Python Secuencial:** Baseline (más lento)
+2. **C Secuencial:** ~3-5x más rápido que Python secuencial
+3. **Python MP:** Speedup según número de cores (2-4x en CPU de 4-8 cores)
+4. **C OpenMP:** Máximo rendimiento en CPU (~5-10x)
+5. **C CUDA:** Máximo rendimiento absoluto con GPU NVIDIA (10-100x según GPU)
