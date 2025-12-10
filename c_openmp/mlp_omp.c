@@ -295,9 +295,10 @@ int main() {
     const char *lbl_path = "../data/train-labels.idx1-ubyte";
 
     // <--- 2. DETECTAR NÚCLEOS (Opcional pero recomendado para verificar)
-    int max_threads = omp_get_max_threads();
-    omp_set_num_threads(max_threads); // Forzar uso de todos
-    printf("--- INICIANDO OPENMP CON %d HILOS ---\n", max_threads);
+    //int max_threads = omp_get_max_threads();
+    //omp_set_num_threads(max_threads); // Forzar uso de todos
+    int num_procs = omp_get_max_threads();
+    printf("--- INICIANDO OPENMP CON %d HILOS ---\n", num_procs);
 
     // 1. Cargar Datos (Esto se queda igual, es lectura de disco secuencial)
     FILE *f_img = fopen(img_path, "rb");
