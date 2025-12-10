@@ -2,6 +2,10 @@ import numpy as np
 import time
 import multiprocessing
 import os
+import sys
+
+# Añadir el directorio python_secuencial al path para poder importar
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'python_secuencial'))
 from preprocesamiento import obtener_datos_listos
 
 # --- 1. FUNCIONES MATEMÁTICAS (Globales para que los workers las vean) ---
