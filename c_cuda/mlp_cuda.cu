@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#include <time.h>        // <-- para clock_t, clock, CLOCKS_PER_SEC
+#include <time.h>
 #include <cuda_runtime.h> // Librería de CUDA
 
 // --- MACRO PARA CHEQUEAR ERRORES CUDA ---
@@ -19,6 +19,7 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort =
         if (abort) exit(code);
     }
 }
+
 
 // --- ESTRUCTURAS (Usando FLOAT para velocidad en GPU) ---
 typedef struct {
@@ -65,6 +66,11 @@ __global__ void matmul_kernel(float *A, float *B, float *C,
         C[row * B_cols + col] = sum;
     }
 }
+// contadores
+float g_time_CPU2GPU    = 0.0f;  // CPU -> GPU
+float g_time_kernel = 0.0f;  // ejecución del kernel
+float g_time_GPU2CPU    = 0.0f;  // GPU -> CPU
+int   g_matmul_calls = 0;    // cuántas veces se llama matrix_multiply_gpu
 
 // --- FUNCIÓN ANFITRIONA (Gestiona la GPU) ---
 Matrix* matrix_multiply_gpu(Matrix *A, Matrix *B) {
@@ -74,6 +80,8 @@ Matrix* matrix_multiply_gpu(Matrix *A, Matrix *B) {
         exit(1);
     }
 
+    g_matmul_calls++;  // otra multiplicación más
+
     Matrix *C = matrix_create(A->rows, B->cols);
 
     // 1. Punteros para memoria en GPU (Device)
@@ -82,36 +90,74 @@ Matrix* matrix_multiply_gpu(Matrix *A, Matrix *B) {
     size_t size_B = (size_t)B->rows * B->cols * sizeof(float);
     size_t size_C = (size_t)C->rows * C->cols * sizeof(float);
 
+    // Eventos para medir tiempos
+    cudaEvent_t evCPU2GPU_start, evCPU2GPU_end;
+    cudaEvent_t evKernel_start, evKernel_end;
+    cudaEvent_t evGPU2CPU_start, evGPU2CPU_end;
+
+    cudaCheckError(cudaEventCreate(&evCPU2GPU_start));
+    cudaCheckError(cudaEventCreate(&evCPU2GPU_end));
+    cudaCheckError(cudaEventCreate(&evKernel_start));
+    cudaCheckError(cudaEventCreate(&evKernel_end));
+    cudaCheckError(cudaEventCreate(&evGPU2CPU_start));
+    cudaCheckError(cudaEventCreate(&evGPU2CPU_end));
+
     // 2. Reservar memoria en GPU
     cudaCheckError(cudaMalloc((void**)&d_A, size_A));
     cudaCheckError(cudaMalloc((void**)&d_B, size_B));
     cudaCheckError(cudaMalloc((void**)&d_C, size_C));
 
-    // 3. Copiar datos: CPU (Host) -> GPU (Device)
+    // 3. Copiar datos: CPU -> GPU  [CPU2GPU]
+    cudaCheckError(cudaEventRecord(evCPU2GPU_start, 0));
     cudaCheckError(cudaMemcpy(d_A, A->data, size_A, cudaMemcpyHostToDevice));
     cudaCheckError(cudaMemcpy(d_B, B->data, size_B, cudaMemcpyHostToDevice));
+    cudaCheckError(cudaEventRecord(evCPU2GPU_end, 0));
+    cudaCheckError(cudaEventSynchronize(evCPU2GPU_end));
 
     // 4. Configurar la cuadrícula (Grid) y Bloques
     dim3 threadsPerBlock(16, 16);
     dim3 numBlocks((C->cols + threadsPerBlock.x - 1) / threadsPerBlock.x,
                    (C->rows + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
-    // 5. LANZAR KERNEL
+    // 5. Lanzar kernel  [kernel]
+    cudaCheckError(cudaEventRecord(evKernel_start, 0));
     matmul_kernel<<<numBlocks, threadsPerBlock>>>(d_A, d_B, d_C,
                                                   A->rows, A->cols, B->cols);
+    cudaCheckError(cudaEventRecord(evKernel_end, 0));
+    cudaCheckError(cudaEventSynchronize(evKernel_end));
     cudaCheckError(cudaPeekAtLastError());
-    cudaCheckError(cudaDeviceSynchronize()); // Esperar a que termine
 
-    // 6. Copiar resultados: GPU (Device) -> CPU (Host)
+    // 6. Copiar resultados: GPU -> CPU  [GPU2CPU]
+    cudaCheckError(cudaEventRecord(evGPU2CPU_start, 0));
     cudaCheckError(cudaMemcpy(C->data, d_C, size_C, cudaMemcpyDeviceToHost));
+    cudaCheckError(cudaEventRecord(evGPU2CPU_end, 0));
+    cudaCheckError(cudaEventSynchronize(evGPU2CPU_end));
 
-    // 7. Liberar memoria GPU
+    // 7. Medir tiempos (ms) y acumular
+    float tCPU2GPU = 0.0f, tKernel = 0.0f, tGPU2CPU = 0.0f;
+    cudaCheckError(cudaEventElapsedTime(&tCPU2GPU, evCPU2GPU_start, evCPU2GPU_end));
+    cudaCheckError(cudaEventElapsedTime(&tKernel,   evKernel_start,  evKernel_end));
+    cudaCheckError(cudaEventElapsedTime(&tGPU2CPU,  evGPU2CPU_start, evGPU2CPU_end));
+
+    g_time_CPU2GPU += tCPU2GPU;
+    g_time_kernel  += tKernel;
+    g_time_GPU2CPU += tGPU2CPU;   // aquí estás guardando GPU->CPU, aunque el nombre diga CPU2CPU
+
+    // 8. Limpiar eventos y memoria GPU
+    cudaCheckError(cudaEventDestroy(evCPU2GPU_start));
+    cudaCheckError(cudaEventDestroy(evCPU2GPU_end));
+    cudaCheckError(cudaEventDestroy(evKernel_start));
+    cudaCheckError(cudaEventDestroy(evKernel_end));
+    cudaCheckError(cudaEventDestroy(evGPU2CPU_start));
+    cudaCheckError(cudaEventDestroy(evGPU2CPU_end));
+
     cudaCheckError(cudaFree(d_A));
     cudaCheckError(cudaFree(d_B));
     cudaCheckError(cudaFree(d_C));
 
     return C;
 }
+
 
 // --- OPERACIONES DE APOYO (CPU) ---
 Matrix* matrix_transpose(Matrix *A) {
@@ -370,7 +416,7 @@ int main() {
 
     MLP *mlp = mlp_create(784, 256, 10);
     int EPOCHS = 10;
-    int BATCH_SIZE = 64;
+    int BATCH_SIZE = 256;
     float LR = 0.1f;
 
     printf("Entrenando %d epocas en GPU...\n", EPOCHS);
@@ -378,6 +424,13 @@ int main() {
     clock_t start = clock();
 
     for (int epoch = 0; epoch < EPOCHS; epoch++) {
+        g_time_CPU2GPU = 0.0f;
+        g_time_kernel  = 0.0f;
+        g_time_GPU2CPU = 0.0f;
+        g_matmul_calls = 0;
+
+        clock_t epoch_start = clock();
+        
         int correct = 0;
         for (int i = 0; i < LIMIT; i += BATCH_SIZE) {
             int current_batch = (LIMIT - i < BATCH_SIZE) ? (LIMIT - i) : BATCH_SIZE;
@@ -403,8 +456,27 @@ int main() {
             matrix_free(X_batch);
             matrix_free(Y_batch);
         }
-        printf("Epoch %d | Accuracy: %.2f%%\n",
-               epoch + 1, (float)correct / LIMIT * 100.0f);
+            clock_t epoch_end = clock();
+            double epoch_time_sec = (double)(epoch_end - epoch_start) / CLOCKS_PER_SEC;
+
+            float total_gpu_ms = g_time_CPU2GPU + g_time_kernel + g_time_GPU2CPU;
+
+            printf("Epoch %d | Accuracy: %.2f%%\n",
+                epoch + 1, (float)correct / LIMIT * 100.0f);
+
+            printf("  [Profiling epoch %d]\n", epoch + 1);
+            printf("  - Llamadas matrix_multiply_gpu: %d\n", g_matmul_calls);
+            printf("  - CPU -> GPU: %.3f ms (%.1f%%)\n",
+                g_time_CPU2GPU,
+                total_gpu_ms > 0 ? 100.0f * g_time_CPU2GPU / total_gpu_ms : 0.0f);
+            printf("  - Kernel:     %.3f ms (%.1f%%)\n",
+                g_time_kernel,
+                total_gpu_ms > 0 ? 100.0f * g_time_kernel / total_gpu_ms : 0.0f);
+            printf("  - GPU -> CPU: %.3f ms (%.1f%%)\n",
+                g_time_GPU2CPU,
+                total_gpu_ms > 0 ? 100.0f * g_time_GPU2CPU / total_gpu_ms : 0.0f);
+            printf("  - Tiempo total epoch (CPU): %.3f s\n\n", epoch_time_sec);
+
     }
 
     clock_t end = clock();
