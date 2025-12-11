@@ -1,3 +1,8 @@
+/*
+ * MLP Neural Network - Implementación Paralela con OpenMP
+ * Red neuronal de 3 capas con paralelización a nivel de bucles
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -5,29 +10,27 @@
 #include <string.h>
 #include <omp.h>
 
-// --- 1. ESTRUCTURA DE MATRIZ Y GESTIÓN DE MEMORIA ---
+// ============================================================================
+// SECCIÓN 1: ESTRUCTURA DE DATOS - MATRIZ
+// ============================================================================
 
 typedef struct {
-    double *data;
-    int rows;
-    int cols;
+    double *data;  // Datos en formato fila-mayor (row-major)
+    int rows;      // Número de filas
+    int cols;      // Número de columnas
 } Matrix;
 
-// Crear una matriz vacía (llena de ceros)
-// Versión corregida de matrix_create
+// Crear matriz inicializada en ceros
 Matrix* matrix_create(int rows, int cols) {
     Matrix *m = (Matrix*)malloc(sizeof(Matrix));
     m->rows = rows;
     m->cols = cols;
-    
-    // CAMBIO AQUÍ: Convertimos a size_t antes de multiplicar
     size_t size = (size_t)rows * (size_t)cols;
-    
-    m->data = (double*)calloc(size, sizeof(double)); 
+    m->data = (double*)calloc(size, sizeof(double));
     return m;
 }
 
-// Liberar memoria (IMPORTANTE EN C)
+// Liberar memoria de una matriz
 void matrix_free(Matrix *m) {
     if (m != NULL) {
         if (m->data != NULL) free(m->data);
@@ -35,32 +38,34 @@ void matrix_free(Matrix *m) {
     }
 }
 
-// Inicializar con valores aleatorios (He/Xavier simplificado)
+// Inicializar matriz con valores aleatorios uniformes en [-scale, scale]
 void matrix_randomize(Matrix *m, double scale) {
     for (int i = 0; i < m->rows * m->cols; i++) {
         m->data[i] = ((double)rand() / RAND_MAX - 0.5) * 2.0 * scale;
     }
 }
 
-// Acceso rápido: M[row][col]
-// Se usa macro o funcion inline para limpieza, aquí manual: m->data[r * cols + c]
+// ============================================================================
+// SECCIÓN 2: OPERACIONES MATRICIALES (Paralelizadas con OpenMP)
+// ============================================================================
 
-// --- 2. OPERACIONES MATEMÁTICAS MANUALES ---
-
-// Multiplicación C = A * B
+// Multiplicación de matrices: C = A × B
+// Paralelización: Distribuye filas de salida entre threads
 Matrix* matrix_multiply(Matrix *A, Matrix *B) {
     if (A->cols != B->rows) {
-        printf("Error dimensión: %dx%d * %dx%d\n", A->rows, A->cols, B->rows, B->cols);
+        printf("Error: Dimensiones incompatibles %dx%d * %dx%d\n", 
+               A->rows, A->cols, B->rows, B->cols);
         exit(1);
     }
+    
     Matrix *C = matrix_create(A->rows, B->cols);
     
+    // Paralelizar bucle externo (independencia entre filas)
     #pragma omp parallel for
     for (int i = 0; i < A->rows; i++) {
         for (int j = 0; j < B->cols; j++) {
             double sum = 0.0;
             for (int k = 0; k < A->cols; k++) {
-                // A[i][k] * B[k][j]
                 sum += A->data[i * A->cols + k] * B->data[k * B->cols + j];
             }
             C->data[i * C->cols + j] = sum;
@@ -69,7 +74,8 @@ Matrix* matrix_multiply(Matrix *A, Matrix *B) {
     return C;
 }
 
-// Transpuesta
+// Transpuesta de matriz: T = A^T
+// Paralelización: Distribuye filas entre threads
 Matrix* matrix_transpose(Matrix *A) {
     Matrix *T = matrix_create(A->cols, A->rows);
     
@@ -82,7 +88,8 @@ Matrix* matrix_transpose(Matrix *A) {
     return T;
 }
 
-// Sumar Bias (Broadcasting)
+// Sumar vector de bias a cada fila (broadcasting)
+// Paralelización: Cada thread procesa filas independientes
 void matrix_add_bias(Matrix *A, Matrix *b) {
     #pragma omp parallel for
     for (int i = 0; i < A->rows; i++) {
@@ -90,9 +97,13 @@ void matrix_add_bias(Matrix *A, Matrix *b) {
             A->data[i * A->cols + j] += b->data[j];
         }
     }
-}
 
-// ReLU: max(0, x)
+// ============================================================================
+// SECCIÓN 3: FUNCIONES DE ACTIVACIÓN (Paralelizadas)
+// ============================================================================
+
+// ReLU: f(x) = max(0, x)
+// Paralelización: Operación elemento a elemento independiente
 void apply_relu(Matrix *M) {
     #pragma omp parallel for
     for (int i = 0; i < M->rows * M->cols; i++) {
@@ -100,7 +111,7 @@ void apply_relu(Matrix *M) {
     }
 }
 
-// Derivada ReLU
+// Derivada de ReLU: f'(x) = 1 si x > 0, 0 en caso contrario
 Matrix* relu_derivative(Matrix *Z) {
     Matrix *D = matrix_create(Z->rows, Z->cols);
     #pragma omp parallel for
@@ -110,18 +121,19 @@ Matrix* relu_derivative(Matrix *Z) {
     return D;
 }
 
-// Softmax
+// Softmax: Convierte logits en probabilidades
+// Paralelización: Cada fila se procesa independientemente
 void apply_softmax(Matrix *M) {
     #pragma omp parallel for
     for (int i = 0; i < M->rows; i++) {
-        // 1. Encontrar maximo (estabilidad)
+        // Encontrar máximo para estabilidad numérica
         double max_val = -1e9;
         for (int j = 0; j < M->cols; j++) {
             double val = M->data[i * M->cols + j];
             if (val > max_val) max_val = val;
         }
         
-        // 2. Exponenciales
+        // Calcular exponenciales y suma
         double sum = 0.0;
         for (int j = 0; j < M->cols; j++) {
             double val = exp(M->data[i * M->cols + j] - max_val);
@@ -129,21 +141,26 @@ void apply_softmax(Matrix *M) {
             sum += val;
         }
         
-        // 3. Normalizar
+        // Normalizar
         for (int j = 0; j < M->cols; j++) {
             M->data[i * M->cols + j] /= sum;
         }
     }
 }
 
-// Resta: A = A - B (usado para gradiente)
+// ============================================================================
+// SECCIÓN 4: UTILIDADES AUXILIARES
+// ============================================================================
+
+// Resta elemento a elemento
 void matrix_subtract(Matrix *A, Matrix *B) {
     for (int i = 0; i < A->rows * A->cols; i++) {
         A->data[i] -= B->data[i];
     }
 }
 
-// One Hot Helper
+// Convertir etiquetas a one-hot encoding
+// Paralelización: Filas independientes
 Matrix* to_one_hot(unsigned char *labels, int rows, int num_classes) {
     Matrix *Y = matrix_create(rows, num_classes);
     #pragma omp parallel for
@@ -153,7 +170,7 @@ Matrix* to_one_hot(unsigned char *labels, int rows, int num_classes) {
     return Y;
 }
 
-// Argmax
+// Obtener índice del valor máximo en una fila
 int get_argmax(Matrix *M, int row) {
     double max_val = -1e9;
     int max_idx = 0;
@@ -166,22 +183,25 @@ int get_argmax(Matrix *M, int row) {
     return max_idx;
 }
 
-// --- 3. LECTURA DE ARCHIVOS MNIST (Big Endian) ---
-
+// Leer entero big-endian (formato MNIST)
 int read_int(FILE *fp) {
     unsigned char buf[4];
     if (fread(buf, 1, 4, fp) != 4) return 0;
     return (int)buf[0] << 24 | (int)buf[1] << 16 | (int)buf[2] << 8 | (int)buf[3];
 }
 
-// --- 4. ESTRUCTURA MLP Y ENTRENAMIENTO ---
+// ============================================================================
+// SECCIÓN 5: RED NEURONAL MLP
+// ============================================================================
 
 typedef struct {
-    Matrix *W1, *b1, *W2, *b2;
-    // Cache de activaciones (se sobrescriben en cada forward)
-    Matrix *A1, *Z1, *A2, *Z2; 
+    Matrix *W1, *b1;  // Capa oculta
+    Matrix *W2, *b2;  // Capa de salida
+    Matrix *A1, *Z1;  // Cache capa oculta
+    Matrix *A2, *Z2;  // Cache capa salida
 } MLP;
 
+// Crear red neuronal
 MLP* mlp_create(int input, int hidden, int output) {
     MLP *net = (MLP*)malloc(sizeof(MLP));
     net->W1 = matrix_create(input, hidden);
@@ -192,13 +212,17 @@ MLP* mlp_create(int input, int hidden, int output) {
     matrix_randomize(net->W1, 0.1);
     matrix_randomize(net->W2, 0.1);
     
-    // Inicializar punteros de cache en NULL
-    net->A1 = NULL; net->Z1 = NULL; net->A2 = NULL; net->Z2 = NULL;
+    net->A1 = NULL;
+    net->Z1 = NULL;
+    net->A2 = NULL;
+    net->Z2 = NULL;
+    
     return net;
 }
 
+// Forward Propagation (usa funciones paralelizadas)
 void mlp_forward(MLP *net, Matrix *X) {
-    // Limpiar memoria anterior si existe
+    // Limpiar cache anterior
     if (net->Z1) matrix_free(net->Z1);
     if (net->A1) matrix_free(net->A1);
     if (net->Z2) matrix_free(net->Z2);
@@ -295,9 +319,10 @@ int main() {
     const char *lbl_path = "../data/train-labels.idx1-ubyte";
 
     // <--- 2. DETECTAR NÚCLEOS (Opcional pero recomendado para verificar)
-    int max_threads = omp_get_max_threads();
-    omp_set_num_threads(max_threads); // Forzar uso de todos
-    printf("--- INICIANDO OPENMP CON %d HILOS ---\n", max_threads);
+    //int max_threads = omp_get_max_threads();
+    //omp_set_num_threads(max_threads); // Forzar uso de todos
+    int num_procs = omp_get_max_threads();
+    printf("--- INICIANDO OPENMP CON %d HILOS ---\n", num_procs);
 
     // 1. Cargar Datos (Esto se queda igual, es lectura de disco secuencial)
     FILE *f_img = fopen(img_path, "rb");
