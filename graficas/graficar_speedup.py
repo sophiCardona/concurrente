@@ -17,7 +17,7 @@ plt.plot(hilos, speedups, marker='o', linewidth=2, color='blue', label='Real (Op
 # Gráfica Ideal
 plt.plot(hilos, ideal_speedup, '--', color='gray', label='Ideal (Lineal)')
 
-plt.title('Análisis de Speedup: Anomalías en i5-13420H')
+plt.title('Análisis de Speedup')
 plt.xlabel('Número de Hilos')
 plt.ylabel('Speedup (X veces más rápido)')
 plt.xticks(hilos)
